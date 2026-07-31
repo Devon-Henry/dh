@@ -4,48 +4,49 @@ Copyright © 2026 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"strings"
-
-	/* "github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity" */
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armdeploymentstacks/v2"
 	"github.com/spf13/cobra"
+	"os"
+	"strings"
 )
 
 var deploymentName string
 var armTemplatePath string
 var excludedActions []string
 var parameters []string
+var ctx = context.Background()
 
 // deployCmd represents the deploy command
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploys the bicep to azure",
-	Long: `Deploy an ARM JSON template as an Azure deployment stack.
+	Long: `
+		Deploy an ARM JSON template as an Azure deployment stack.
 
-Build Bicep before running this command, then pass the generated ARM JSON file:
+		Build Bicep before running this command, then pass the generated ARM JSON file:
 
-  az bicep build \
-    --file ../infra/main.bicep \
-    --outfile ../infra/main.json
+  		az bicep build \
+    		--file ../infra/main.bicep \
+      		--outfile ../infra/main.json
 
-  dh deploy \
-    --deployment-name workload-main \
-    --arm-template ../infra/main.json \
-    --parameter workloadName=example-api \
-    --parameter imageTag=2026.07.30.1 \
-    --excluded-actions Microsoft.Authorization/locks/delete \
-    --excluded-actions Microsoft.Resources/deployments/delete
+        dh deploy \
+        	--deployment-name workload-main \
+         	--arm-template ../infra/main.json \
+          	--parameter workloadName=example-api \
+           	--parameter imageTag=2026.07.30.1 \
+            --excluded-actions Microsoft.Authorization/locks/delete \
+            --excluded-actions Microsoft.Resources/deployments/delete
 
-In Azure DevOps pipelines, the workload environment is derived from
-BUILD_SOURCEBRANCH, BUILD_REASON, and SYSTEM_PULLREQUEST_TARGETBRANCH.
+        In Azure DevOps pipelines, the workload environment is derived from
+        BUILD_SOURCEBRANCH, BUILD_REASON, and SYSTEM_PULLREQUEST_TARGETBRANCH.
 
-This command also expects the pipeline to provide the subscription, location,
-and object ID variables for the detected environment.`,
+        This command also expects the pipeline to provide the subscription, location,
+        and object ID variables for the detected environment.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		environment, err := GetWorkloadEnvironment()
 		if err != nil {
@@ -67,7 +68,41 @@ and object ID variables for the detected environment.`,
 			return err
 		}
 
-		_ = config
+		cred, err := azidentity.NewAzureCLICredential(nil)
+		if err != nil {
+			return err
+		}
+
+		clientFactory, err := armdeploymentstacks.NewClientFactory(config.SubscriptionId, cred, nil)
+		if err != nil {
+			return err
+		}
+
+		client := clientFactory.NewClient()
+
+		deploy, err := client.BeginCreateOrUpdateAtSubscription(
+			ctx,
+			config.DeploymentName,
+			armdeploymentstacks.DeploymentStack{
+				Location: to.Ptr(config.Location),
+				Properties: &armdeploymentstacks.DeploymentStackProperties{
+					Template:         config.ARMTemplate,
+					ActionOnUnmanage: &config.ActionOnUnmanage,
+					DenySettings:     &config.DenySettings,
+					Parameters:       config.Parameters,
+				},
+			},
+			nil,
+		)
+
+		if err != nil {
+			return err
+		}
+
+		_, err = deploy.PollUntilDone(ctx, nil)
+		if err != nil {
+			return err
+		}
 		return nil
 	},
 }
@@ -96,14 +131,14 @@ func init() {
 type Config struct {
 	SubscriptionId   string
 	Location         string
-	Parameters       map[string]any
+	Parameters       map[string]*armdeploymentstacks.DeploymentParameter
 	DeploymentName   string
 	ARMTemplate      map[string]any
 	ActionOnUnmanage armdeploymentstacks.ActionOnUnmanage
 	DenySettings     armdeploymentstacks.DenySettings
 }
 
-func getConfig(env string, armTemplate map[string]any, parameters map[string]any, excludedActions []string) (Config, error) {
+func getConfig(env string, armTemplate map[string]any, parameters map[string]*armdeploymentstacks.DeploymentParameter, excludedActions []string) (Config, error) {
 
 	var subscriptionId string
 	var location string
@@ -176,8 +211,8 @@ func getActionOnUnmanage() armdeploymentstacks.ActionOnUnmanage {
 	}
 }
 
-func parseParameters(values []string) (map[string]any, error) {
-	parsed := make(map[string]any)
+func parseParameters(values []string) (map[string]*armdeploymentstacks.DeploymentParameter, error) {
+	parsed := make(map[string]*armdeploymentstacks.DeploymentParameter)
 
 	for _, value := range values {
 		key, parameterValue, ok := strings.Cut(value, "=")
@@ -190,8 +225,8 @@ func parseParameters(values []string) (map[string]any, error) {
 			return nil, fmt.Errorf("invalid parameter %q, key cannot be empty", value)
 		}
 
-		parsed[key] = map[string]any{
-			"value": parameterValue,
+		parsed[key] = &armdeploymentstacks.DeploymentParameter{
+			Value: parameterValue,
 		}
 	}
 
