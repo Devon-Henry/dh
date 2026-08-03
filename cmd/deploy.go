@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armdeploymentstacks/v2"
@@ -19,6 +20,7 @@ var deploymentName string
 var armTemplatePath string
 var excludedActions []string
 var parameters []string
+var platform bool
 var ctx = context.Background()
 
 // deployCmd represents the deploy command
@@ -46,7 +48,23 @@ var deployCmd = &cobra.Command{
         BUILD_SOURCEBRANCH, BUILD_REASON, and SYSTEM_PULLREQUEST_TARGETBRANCH.
 
         This command also expects the pipeline to provide the subscription, location,
-        and object ID variables for the detected environment.`,
+        and object ID variables for the detected environment.
+
+        Pass --platform to deploy a platform component instead of a workload. Platform
+        deployments target a shifted ring, because a platform change must be proven in
+        the environment below the one that requested it:
+
+            detected Development -> RootDev
+            detected Test        -> Development
+            detected Production  -> Test, then Production
+
+        A detected Production platform build therefore performs two deployments in
+        sequence and stops if the Test deployment fails. Platform mode additionally
+        expects ROOTDEV_SUB_ID and ROOTDEV_DEPLOYMENT_LOCATION:
+
+        dh deploy --platform \
+            --deployment-name platform-main \
+            --arm-template ../infra/main.json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		environment, err := GetWorkloadEnvironment()
 		if err != nil {
@@ -63,7 +81,7 @@ var deployCmd = &cobra.Command{
 			return err
 		}
 
-		config, err := getConfig(environment, armTemplate, parsedParameters, excludedActions)
+		targets, err := getTargetEnvironments(environment, platform)
 		if err != nil {
 			return err
 		}
@@ -73,36 +91,23 @@ var deployCmd = &cobra.Command{
 			return err
 		}
 
-		clientFactory, err := armdeploymentstacks.NewClientFactory(config.SubscriptionId, cred, nil)
-		if err != nil {
-			return err
+		for _, target := range targets {
+			config, err := getConfig(target, armTemplate, parsedParameters, excludedActions)
+			if err != nil {
+				return err
+			}
+
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Deploying %q to %s (subscription %s, %s)\n",
+				config.DeploymentName, target, config.SubscriptionId, config.Location)
+			if err != nil {
+				return err
+			}
+
+			if err := runDeployment(ctx, cred, config); err != nil {
+				return fmt.Errorf("deployment to %s failed: %w", target, err)
+			}
 		}
 
-		client := clientFactory.NewClient()
-
-		deploy, err := client.BeginCreateOrUpdateAtSubscription(
-			ctx,
-			config.DeploymentName,
-			armdeploymentstacks.DeploymentStack{
-				Location: to.Ptr(config.Location),
-				Properties: &armdeploymentstacks.DeploymentStackProperties{
-					Template:         config.ARMTemplate,
-					ActionOnUnmanage: &config.ActionOnUnmanage,
-					DenySettings:     &config.DenySettings,
-					Parameters:       config.Parameters,
-				},
-			},
-			nil,
-		)
-
-		if err != nil {
-			return err
-		}
-
-		_, err = deploy.PollUntilDone(ctx, nil)
-		if err != nil {
-			return err
-		}
 		return nil
 	},
 }
@@ -126,6 +131,64 @@ func init() {
 	deployCmd.Flags().StringVar(&armTemplatePath, "arm-template", "../infra/main.json", "Location of the ARM JSON template.")
 	deployCmd.Flags().StringSliceVar(&excludedActions, "excluded-actions", nil, "Actions excluded from deny settings. Can be comma-separated or repeated.")
 	deployCmd.Flags().StringArrayVar(&parameters, "parameter", nil, "ARM template parameter in key=value format. Can be repeated.")
+	deployCmd.Flags().BoolVar(&platform, "platform", false, "Deploy as a platform component: targets RootDev/Development instead of Development/Test, and deploys Production to both Test and Production.")
+}
+
+// getTargetEnvironments maps the environment detected from the pipeline to the
+// environments that should actually be deployed to, in order.
+//
+// A workload deploys 1:1 to the environment it was detected in. A platform
+// component deploys one ring lower, because a platform change must be proven in
+// the environment below the one that requested it, and a Production platform
+// build therefore lands in Test before Production.
+func getTargetEnvironments(env string, platform bool) ([]string, error) {
+	if !platform {
+		return []string{env}, nil
+	}
+
+	switch env {
+	case "Production":
+		return []string{"Test", "Production"}, nil
+	case "Test":
+		return []string{"Development"}, nil
+	case "Development":
+		return []string{"RootDev"}, nil
+	default:
+		return nil, fmt.Errorf("Unknown env: %s", env)
+	}
+}
+
+// runDeployment creates or updates a single deployment stack and waits for it to
+// finish. The credential is passed in so it can be reused across targets.
+func runDeployment(ctx context.Context, cred azcore.TokenCredential, config Config) error {
+	clientFactory, err := armdeploymentstacks.NewClientFactory(config.SubscriptionId, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	client := clientFactory.NewClient()
+
+	deploy, err := client.BeginCreateOrUpdateAtSubscription(
+		ctx,
+		config.DeploymentName,
+		armdeploymentstacks.DeploymentStack{
+			Location: to.Ptr(config.Location),
+			Properties: &armdeploymentstacks.DeploymentStackProperties{
+				Template:         config.ARMTemplate,
+				ActionOnUnmanage: &config.ActionOnUnmanage,
+				DenySettings:     &config.DenySettings,
+				Parameters:       config.Parameters,
+			},
+		},
+		nil,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	_, err = deploy.PollUntilDone(ctx, nil)
+	return err
 }
 
 type Config struct {
@@ -158,6 +221,9 @@ func getConfig(env string, armTemplate map[string]any, parameters map[string]*ar
 	case "Development":
 		subscriptionId = os.Getenv("DEV_SUB_ID")
 		location = os.Getenv("DEV_DEPLOYMENT_LOCATION")
+	case "RootDev":
+		subscriptionId = os.Getenv("ROOTDEV_SUB_ID")
+		location = os.Getenv("ROOTDEV_DEPLOYMENT_LOCATION")
 	default:
 		return Config{}, fmt.Errorf("Unknown env: %s", env)
 	}
@@ -182,7 +248,7 @@ func getDenySettings(env string, excludedActions []string) (armdeploymentstacks.
 		principalObjectID = os.Getenv("PROD_OBJ_ID")
 	case "Test":
 		principalObjectID = os.Getenv("TEST_OBJ_ID")
-	case "Development":
+	case "Development", "RootDev":
 		return armdeploymentstacks.DenySettings{
 			Mode: to.Ptr(armdeploymentstacks.DenySettingsModeNone),
 		}, nil
