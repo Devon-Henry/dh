@@ -298,10 +298,11 @@ func parseParameters(values []string, environment string) (map[string]*armdeploy
 			Value: parameterValue,
 		}
 
-		if workloadParameter {
-			parsed["workloadEnvironment"] = &armdeploymentstacks.DeploymentParameter{
-				Value: environment,
-			}
+	}
+
+	if workloadParameter {
+		parsed["workloadEnvironment"] = &armdeploymentstacks.DeploymentParameter{
+			Value: environment,
 		}
 	}
 
