@@ -21,6 +21,7 @@ var armTemplatePath string
 var excludedActions []string
 var parameters []string
 var platform bool
+var workloadParameter bool
 var ctx = context.Background()
 
 // deployCmd represents the deploy command
@@ -76,7 +77,7 @@ var deployCmd = &cobra.Command{
 			return err
 		}
 
-		parsedParameters, err := parseParameters(parameters)
+		parsedParameters, err := parseParameters(parameters, environment)
 		if err != nil {
 			return err
 		}
@@ -132,6 +133,8 @@ func init() {
 	deployCmd.Flags().StringSliceVar(&excludedActions, "excluded-actions", nil, "Actions excluded from deny settings. Can be comma-separated or repeated.")
 	deployCmd.Flags().StringArrayVar(&parameters, "parameter", nil, "ARM template parameter in key=value format. Can be repeated.")
 	deployCmd.Flags().BoolVar(&platform, "platform", false, "Deploy as a platform component: targets RootDev/Development instead of Development/Test, and deploys Production to both Test and Production.")
+	deployCmd.Flags().BoolVar(&workloadParameter, "workloadParameter", false, "Adds 'the environment as a prameter to the deployment example param workloadEnvironment = 'Production'")
+
 }
 
 // getTargetEnvironments maps the environment detected from the pipeline to the
@@ -277,7 +280,7 @@ func getActionOnUnmanage() armdeploymentstacks.ActionOnUnmanage {
 	}
 }
 
-func parseParameters(values []string) (map[string]*armdeploymentstacks.DeploymentParameter, error) {
+func parseParameters(values []string, environment string) (map[string]*armdeploymentstacks.DeploymentParameter, error) {
 	parsed := make(map[string]*armdeploymentstacks.DeploymentParameter)
 
 	for _, value := range values {
@@ -293,6 +296,12 @@ func parseParameters(values []string) (map[string]*armdeploymentstacks.Deploymen
 
 		parsed[key] = &armdeploymentstacks.DeploymentParameter{
 			Value: parameterValue,
+		}
+
+		if workloadParameter {
+			parsed["workloadEnvironment"] = &armdeploymentstacks.DeploymentParameter{
+				Value: environment,
+			}
 		}
 	}
 
