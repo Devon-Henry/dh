@@ -82,6 +82,18 @@ var deployCmd = &cobra.Command{
 			return err
 		}
 
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "workload parameter is: %v\n",
+			workloadParameter)
+		if err != nil {
+			return err
+		}
+
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Deploying with params: %v\n",
+			parsedParameters)
+		if err != nil {
+			return err
+		}
+
 		targets, err := getTargetEnvironments(environment, platform)
 		if err != nil {
 			return err
@@ -301,6 +313,7 @@ func parseParameters(values []string, environment string) (map[string]*armdeploy
 	}
 
 	if workloadParameter {
+	
 		parsed["workloadEnvironment"] = &armdeploymentstacks.DeploymentParameter{
 			Value: environment,
 		}
