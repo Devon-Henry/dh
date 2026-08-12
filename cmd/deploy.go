@@ -22,6 +22,7 @@ var excludedActions []string
 var parameters []string
 var platform bool
 var workloadParameter bool
+var parametersFilePath string
 var ctx = context.Background()
 
 // deployCmd represents the deploy command
@@ -77,7 +78,7 @@ var deployCmd = &cobra.Command{
 			return err
 		}
 
-		parsedParameters, err := parseParameters(parameters, environment)
+		parsedParameters, err := getParameters(parametersFilePath, parameters, environment)
 		if err != nil {
 			return err
 		}
@@ -146,7 +147,7 @@ func init() {
 	deployCmd.Flags().StringArrayVar(&parameters, "parameter", nil, "ARM template parameter in key=value format. Can be repeated.")
 	deployCmd.Flags().BoolVar(&platform, "platform", false, "Deploy as a platform component: targets RootDev/Development instead of Development/Test, and deploys Production to both Test and Production.")
 	deployCmd.Flags().BoolVar(&workloadParameter, "workloadParameter", false, "Adds 'the environment as a prameter to the deployment example param workloadEnvironment = 'Production'")
-
+	deployCmd.Flags().StringVar(&parametersFilePath, "parametersFile", "", "ARM Parameters JSON file, generated from .bicepparam with az bicep build-params.")
 }
 
 // getTargetEnvironments maps the environment detected from the pipeline to the
@@ -294,6 +295,55 @@ func getActionOnUnmanage() armdeploymentstacks.ActionOnUnmanage {
 		ResourceGroups:                to.Ptr(armdeploymentstacks.UnmanageActionResourceGroupModeDelete),
 		ResourcesWithoutDeleteSupport: to.Ptr(armdeploymentstacks.ResourcesWithoutDeleteSupportActionDetach),
 	}
+}
+
+func getParameters(parametersFilePath string, parameterOverrides []string, environment string) (map[string]*armdeploymentstacks.DeploymentParameter, error) {
+	merged := make(map[string]*armdeploymentstacks.DeploymentParameter)
+
+	if parametersFilePath != "" {
+		fromFile, err := readParametersFile(parametersFilePath)
+		if err != nil {
+			return nil, err
+		}
+
+		for key, value := range fromFile {
+			merged[key] = value
+		}
+	}
+
+	fromFlags, err := parseParameters(parameterOverrides, environment)
+	if err != nil {
+		return nil, err
+	}
+
+	for key, value := range fromFlags {
+		merged[key] = value
+	}
+
+	return merged, nil
+}
+
+type armParametersFile struct {
+	Parameters map[string]*armdeploymentstacks.DeploymentParameter
+}
+
+func readParametersFile(parametersFilePath string) (map[string]*armdeploymentstacks.DeploymentParameter, error) {
+	file, err := os.ReadFile(parametersFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("parameters file reading error: %w", err)
+	}
+
+	var content armParametersFile
+
+	if err := json.Unmarshal(file, &content); err != nil {
+		return nil, fmt.Errorf("parameters file JSON parse error: %w", err)
+	}
+
+	if content.Parameters == nil {
+		return nil, fmt.Errorf("parameters file %q does not containe a top-level parameters object", parametersFilePath)
+	}
+
+	return content.Parameters, nil
 }
 
 func parseParameters(values []string, environment string) (map[string]*armdeploymentstacks.DeploymentParameter, error) {
