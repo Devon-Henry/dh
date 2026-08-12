@@ -105,7 +105,7 @@ var deployCmd = &cobra.Command{
 		}
 
 		for _, target := range targets {
-			config, err := getConfig(target, armTemplate, parsedParameters, excludedActions)
+			config, err := getConfig(target, armTemplate, parsedParameters, excludedActions, platform)
 			if err != nil {
 				return err
 			}
@@ -216,11 +216,11 @@ type Config struct {
 	DenySettings     armdeploymentstacks.DenySettings
 }
 
-func getConfig(env string, armTemplate map[string]any, parameters map[string]*armdeploymentstacks.DeploymentParameter, excludedActions []string) (Config, error) {
+func getConfig(env string, armTemplate map[string]any, parameters map[string]*armdeploymentstacks.DeploymentParameter, excludedActions []string, platform bool) (Config, error) {
 
 	var subscriptionId string
 	var location string
-	denySettings, err := getDenySettings(env, excludedActions)
+	denySettings, err := getDenySettings(env, excludedActions, platform)
 	if err != nil {
 		return Config{}, err
 	}
@@ -255,14 +255,18 @@ func getConfig(env string, armTemplate map[string]any, parameters map[string]*ar
 
 }
 
-func getDenySettings(env string, excludedActions []string) (armdeploymentstacks.DenySettings, error) {
+func getDenySettings(env string, excludedActions []string, platform bool) (armdeploymentstacks.DenySettings, error) {
 	var principalObjectID string
 
 	switch env {
 	case "Production":
 		principalObjectID = os.Getenv("PROD_OBJ_ID")
 	case "Test":
-		principalObjectID = os.Getenv("TEST_OBJ_ID")
+		if platform {
+			principalObjectID = os.Getenv("PROD_OBJ_ID")
+		} else {
+			principalObjectID = os.Getenv("TEST_OBJ_ID")
+		}
 	case "Development", "RootDev":
 		return armdeploymentstacks.DenySettings{
 			Mode: to.Ptr(armdeploymentstacks.DenySettingsModeNone),
