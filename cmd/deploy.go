@@ -110,8 +110,8 @@ var deployCmd = &cobra.Command{
 				return err
 			}
 
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Deploying %q to %s (subscription %s, %s)\n",
-				config.DeploymentName, target, config.SubscriptionId, config.Location)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Deploying %q to %s (subscription %s, %s, excluded principal %v)\n",
+				config.DeploymentName, target, config.SubscriptionId, config.Location, config.DenySettings.ExcludedPrincipals)
 			if err != nil {
 				return err
 			}
