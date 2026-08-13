@@ -106,7 +106,7 @@ var deployCmd = &cobra.Command{
 		}
 
 		for _, target := range targets {
-			config, err := getConfig(target, armTemplate, parsedParameters, excludedActions, platform)
+			config, err := getConfig(target, armTemplate, parsedParameters, excludedActions)
 			if err != nil {
 				return err
 			}
@@ -217,11 +217,11 @@ type Config struct {
 	DenySettings     armdeploymentstacks.DenySettings
 }
 
-func getConfig(env string, armTemplate map[string]any, parameters map[string]*armdeploymentstacks.DeploymentParameter, excludedActions []string, platform bool) (Config, error) {
+func getConfig(env string, armTemplate map[string]any, parameters map[string]*armdeploymentstacks.DeploymentParameter, excludedActions []string) (Config, error) {
 
 	var subscriptionId string
 	var location string
-	denySettings, err := getDenySettings(env, excludedActions, platform)
+	denySettings, err := getDenySettings(env, excludedActions)
 	if err != nil {
 		return Config{}, err
 	}
@@ -256,18 +256,18 @@ func getConfig(env string, armTemplate map[string]any, parameters map[string]*ar
 
 }
 
-func getDenySettings(env string, excludedActions []string, platform bool) (armdeploymentstacks.DenySettings, error) {
+func getDenySettings(env string, excludedActions []string) (armdeploymentstacks.DenySettings, error) {
 	var principalObjectID string
-
+	var prodObjectID string
+	
 	switch env {
 	case "Production":
 		principalObjectID = os.Getenv("PROD_OBJ_ID")
 	case "Test":
-		if platform {
-			principalObjectID = os.Getenv("PROD_OBJ_ID")
-		} else {
-			principalObjectID = os.Getenv("TEST_OBJ_ID")
-		}
+		
+		principalObjectID = os.Getenv("TEST_OBJ_ID")
+		prodObjectID = os.Getenv("PROD_OBJ_ID")
+	
 	case "Development", "RootDev":
 		return armdeploymentstacks.DenySettings{
 			Mode: to.Ptr(armdeploymentstacks.DenySettingsModeNone),
@@ -279,6 +279,9 @@ func getDenySettings(env string, excludedActions []string, platform bool) (armde
 	var excludedPrincipals []*string
 	if principalObjectID != "" {
 		excludedPrincipals = []*string{to.Ptr(principalObjectID)}
+	}
+	if prodObjectID != "" {
+		excludedPrincipals = append(excludedPrincipals, to.Ptr(prodObjectID))
 	}
 
 	return armdeploymentstacks.DenySettings{
