@@ -7,13 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armdeploymentstacks/v2"
 	"github.com/spf13/cobra"
-	"os"
-	"strings"
 )
 
 var deploymentName string
@@ -23,6 +24,8 @@ var parameters []string
 var platform bool
 var workloadParameter bool
 var parametersFilePath string
+var resourceGroupScope bool
+var resourceGroupName string
 var ctx = context.Background()
 
 // deployCmd represents the deploy command
@@ -68,6 +71,9 @@ var deployCmd = &cobra.Command{
             --deployment-name platform-main \
             --arm-template ../infra/main.json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if (resourceGroupScope && resourceGroupName == "") {
+			return fmt.Errorf("resource group name must be set if --rg-scope flag is used.")
+		}
 		environment, err := GetWorkloadEnvironment()
 		if err != nil {
 			return err
@@ -117,9 +123,17 @@ var deployCmd = &cobra.Command{
 				return err
 			}
 
-			if err := runDeployment(ctx, cred, config); err != nil {
-				return fmt.Errorf("deployment to %s failed: %w", target, err)
+			if resourceGroupScope {
+				if err := runResourceGroupDeployment(ctx, cred, config); err != nil {
+					return fmt.Errorf("deployment to %s failed: %w", target, err)
+				}
+			} else {
+				if err := runDeployment(ctx, cred, config); err != nil {
+					return fmt.Errorf("deployment to %s failed: %w", target, err)
+				}
 			}
+
+	
 		}
 
 		return nil
@@ -148,6 +162,9 @@ func init() {
 	deployCmd.Flags().BoolVar(&platform, "platform", false, "Deploy as a platform component: targets RootDev/Development instead of Development/Test, and deploys Production to both Test and Production.")
 	deployCmd.Flags().BoolVar(&workloadParameter, "workloadParameter", false, "Adds 'the environment as a prameter to the deployment example param workloadEnvironment = 'Production'")
 	deployCmd.Flags().StringVar(&parametersFilePath, "parametersFile", "", "ARM Parameters JSON file, generated from .bicepparam with az bicep build-params.")
+	deployCmd.Flags().BoolVar(&resourceGroupScope, "rg-scope", false, "Deploys the stack at resource group scope, must pass a resource group name as well.")
+	deployCmd.Flags().StringVar(&resourceGroupName, "rg-name", "", "The name of the resource group to deploy into, must be used if --rg-scope is set. ")
+
 }
 
 // getTargetEnvironments maps the environment detected from the pipeline to the
@@ -186,6 +203,38 @@ func runDeployment(ctx context.Context, cred azcore.TokenCredential, config Conf
 
 	deploy, err := client.BeginCreateOrUpdateAtSubscription(
 		ctx,
+		config.DeploymentName,
+		armdeploymentstacks.DeploymentStack{
+			Location: to.Ptr(config.Location),
+			Properties: &armdeploymentstacks.DeploymentStackProperties{
+				Template:         config.ARMTemplate,
+				ActionOnUnmanage: &config.ActionOnUnmanage,
+				DenySettings:     &config.DenySettings,
+				Parameters:       config.Parameters,
+			},
+		},
+		nil,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	_, err = deploy.PollUntilDone(ctx, nil)
+	return err
+}
+
+func runResourceGroupDeployment(ctx context.Context, cred azcore.TokenCredential, config Config) error {
+	clientFactory, err := armdeploymentstacks.NewClientFactory(config.SubscriptionId, cred, nil)
+	if err != nil {
+		return err
+	}
+
+	client := clientFactory.NewClient()
+
+	deploy, err := client.BeginCreateOrUpdateAtResourceGroup(
+		ctx,
+		resourceGroupName,
 		config.DeploymentName,
 		armdeploymentstacks.DeploymentStack{
 			Location: to.Ptr(config.Location),
