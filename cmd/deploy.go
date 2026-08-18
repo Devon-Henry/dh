@@ -337,6 +337,7 @@ func getDenySettings(env string, excludedActions []string) (armdeploymentstacks.
 		Mode:               to.Ptr(armdeploymentstacks.DenySettingsModeDenyWriteAndDelete),
 		ExcludedPrincipals: excludedPrincipals,
 		ExcludedActions:    toStringPointers(excludedActions),
+		ApplyToChildScopes: to.Ptr(true),
 	}, nil
 
 }
