@@ -237,7 +237,6 @@ func runResourceGroupDeployment(ctx context.Context, cred azcore.TokenCredential
 		resourceGroupName,
 		config.DeploymentName,
 		armdeploymentstacks.DeploymentStack{
-			Location: to.Ptr(config.Location),
 			Properties: &armdeploymentstacks.DeploymentStackProperties{
 				Template:         config.ARMTemplate,
 				ActionOnUnmanage: &config.ActionOnUnmanage,
